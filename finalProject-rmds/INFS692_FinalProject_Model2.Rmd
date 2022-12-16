@@ -1,0 +1,95 @@
+---
+title: "INFS 692 Data Science Final Project Model2"
+author: "Ivan Huang"
+date: '2022-12-07'
+output: pdf_document
+---
+# Model 2
+
+first thing first, don't forget to import essential libraries
+```{r}
+library(keras)
+library(caret)
+```
+
+
+## Step1: Create a neural **network-based classification** model.
+```{r}
+# read the csv file to data frame
+data_m2 <- read.csv('./radiomics_completedata.csv') 
+
+index <- createDataPartition(data_m2$Failure.binary,p=0.8,list=F)
+
+#Test labels in the Species column (column 5)
+Train_Features <- data.matrix(data_m2[index,-2])
+Train_Labels <- data_m2[index,2]
+Test_Features <- data.matrix(data_m2[-index,-2])
+Test_Labels <- data_m2[-index,2]
+
+#convering the labels into categorical
+to_categorical(as.numeric(Train_Labels))[,c(-1)] -> Train_Labels
+to_categorical(as.numeric(Test_Labels))[,c(-1)] -> Test_Labels
+
+summary(Train_Labels)
+
+str(Train_Features)
+
+#converting the features into matrix
+as.matrix(apply(Train_Features, 2, function(x) (x-min(x))/(max(x) - min(x)))) -> Train_Features
+as.matrix(apply(Test_Features, 2, function(x) (x-min(x))/(max(x) - min(x)))) -> Test_Features
+```
+
+## Step 2: Create five hidden layers with 256, 128, 128, 64 and 64 neurons, respectively with activation functions of Sigmoid
+
+```{r}
+#building the model
+model <- keras_model_sequential()
+
+#model training
+model <- keras_model_sequential() %>%
+  layer_dense(units = 256, activation = "sigmoid", input_shape = ncol(Train_Features)) %>%
+  layer_dropout(rate = 0.25) %>% 
+  layer_dense(units = 128, activation = "sigmoid") %>%
+  layer_dropout(rate = 0.25) %>% 
+  layer_dense(units = 128, activation = "sigmoid") %>%
+  layer_dropout(rate = 0.25) %>%
+  layer_dense(units = 64, activation = 'sigmoid') %>%
+  layer_dropout(rate = 0.25) %>%
+  layer_dense(units = 64, activation = 'sigmoid') %>%
+  layer_dropout(rate  =0.25) %>%
+  layer_dense(units = 2,  activation = 'softmax') %>%
+  
+  #compiling the model
+  compile(
+    loss = "categorical_crossentropy",
+    optimizer = optimizer_rmsprop(),
+    metrics = c("accuracy")
+    )
+
+summary(model)
+```
+
+## Step 4: Copy the slide 33 model compiler approach.
+```{r}
+model %>% compile(
+  loss = "sparse_categorical_crossentropy",
+  optimizer = optimizer_adam(),
+  metrics = c("accuracy")
+)
+```
+
+## Step 5: Train the model with epoch = 10, batch size = 128 and validation split = 0.15 (reference slide 33).
+```{r}
+history <- model %>% 
+  fit(Train_Features, Train_Labels, epochs = 10, batch_size = 128, validation_split = 0.5)
+```
+
+## Step 6: Evaluate the trained model using the testing dataset.
+```{r}
+model %>% evaluate(Test_Features,Test_Labels)
+```
+
+## Step 7: Get the model prediction using the testing dataset.
+```{r}
+model %>% predict(Test_Features)
+```

@@ -1,0 +1,161 @@
+---
+title: "INFS 692 Data Science Final Project Model1"
+author: "Ivan Huang"
+date: '2022-12-05'
+output: pdf_document
+---
+
+**A total of _three models_ should be should be performed for this final project. You should find the detailed codes and answers underneath**
+
+## Model 1
+
+### Step 1: Create an **ensemble classification model** (at least 3 models of your choice).
+
+Answer: For this first answer, after some scrutinized research, only _stacking_ among all ensemble methods can be performed in three different approaches. Therefore, I intend to use stacking models for ensemble classification model.
+
+First, we need to implement all the essential R libraries so that we can run the codes afterwards.
+
+```{r, echo=TRUE}
+# Helper packages
+library(rsample)   # for creating our train-test splits
+library(recipes)   # for minor feature engineering tasks
+
+# Modeling packages
+library(h2o)       # for fitting stacked models
+
+# Other packages
+library(ggplot2)
+library(rpart)       # direct engine for decision tree application
+library(caret) # meta engine for decision tree application
+library(recipes)
+library(dslabs)     
+library(purrr)
+library(pROC)
+library(rpart.plot)  # for plotting decision trees
+library(vip)         # for feature importance
+library(pdp)         # for feature effects
+```
+
+### Step 2: Data Preprocessing
+
+1. Introduce the sample data; _check for **null** and **missing values**_
+```{r, echo=TRUE}
+# Load data from local environment (supposedly from the same directory)
+# split the data
+data <- read.csv('./radiomics_completedata.csv')
+which(is.na(data)) # returns integer(0) meaning there is no null or missing value
+```
+
+2. Remove the categorical and binary data
+```{r, results='hide'}
+institution <- data$Institution
+i1 <- sapply(data, is.numeric) #remove all the categorical data
+data <- data[i1]
+Failure_binary <- data$Failure.binary
+data <- Filter(function(x) !all(x %in% c(0, 1)), data) # remove all the binary data
+final_data <- scale(data)
+
+final_data <- as.data.frame(final_data)
+```
+
+3. Get the correlation of the whole data
+```{r, results='hide'}
+cor(final_data)
+```
+
+
+### Step 3: Split the data into training (80%) and testing (20%)
+
+```{r, echo=TRUE}
+set.seed(123) # for reproducibility
+final_data2 <- cbind(final_data, Failure_binary)
+final_data3 <- cbind(final_data2, institution)
+split <- initial_split(final_data3, prop = 0.8, strata = 'Failure') #prop = 0.8 as in training vs. testing is 8 : 2
+data_train <- training(split)
+data_test <- testing(split)
+```
+
+### Step 4: Print the AUC values during Training
+
+But before that, we need to create different training models and stack them together
+
+```{r, echo=TRUE}
+# Make sure we have consistent categorical levels
+blueprint <- recipe(Failure_binary ~ ., data = data_train) %>%
+  step_other(all_nominal(), threshold = 0.005)
+
+# Create training & test sets for h2o
+h2o.init()
+train_h2o <- prep(blueprint, training = data_train, retain = TRUE) %>%
+  juice() %>%
+  as.h2o()
+test_h2o <- prep(blueprint, training = data_train) %>%
+  bake(new_data = data_test) %>%
+  as.h2o()
+
+# Get response and feature names
+Y <- "Failure_binary"
+X <- setdiff(names(data_train), Y)
+
+# Train & cross-validate a GLM model
+best_glm <- h2o.glm(
+  x = X, y = Y, training_frame = train_h2o, alpha = 0.1,
+  remove_collinear_columns = TRUE, nfolds = 10, fold_assignment = "Modulo",
+  keep_cross_validation_predictions = TRUE, seed = 123
+)
+
+# Train & cross-validate a RF model
+best_rf <- h2o.randomForest(
+  x = X, y = Y, training_frame = train_h2o, ntrees = 500, mtries = 20,
+  max_depth = 30, min_rows = 1, sample_rate = 0.8, nfolds = 10,
+  fold_assignment = "Modulo", keep_cross_validation_predictions = TRUE,
+  seed = 123, stopping_rounds = 50, stopping_metric = "RMSE",
+  stopping_tolerance = 0
+)
+
+# Train & cross-validate a GBM model
+best_gbm <- h2o.gbm(
+  x = X, y = Y, training_frame = train_h2o, ntrees = 500, learn_rate = 0.01,
+  max_depth = 7, min_rows = 5, sample_rate = 0.8, nfolds = 10,
+  fold_assignment = "Modulo", keep_cross_validation_predictions = TRUE,
+  seed = 123, stopping_rounds = 50, stopping_metric = "RMSE",
+  stopping_tolerance = 0
+)
+
+# Train a stacked ensemble using all the previous models
+
+ensemble <- h2o.stackedEnsemble(x = X, y = Y, training_frame = train_h2o, base_models = list(best_glm, best_rf, best_gbm))
+
+# Compute predicted probabilities on training data
+df_train <- as.data.frame(train_h2o)
+m1_prob <- predict(ensemble, train_h2o, type = "prob")
+df_m1prob <- as.data.frame(m1_prob)
+
+# ROC plot for training data
+
+roc(df_train$Failure_binary~ df_m1prob[,1], plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+```
+
+### Step 5: Print the Top 20 important features during Training
+
+```{r, echo=TRUE}
+#feature importance
+vip::vip(best_gbm, num_features = 20, bar = FALSE)
+vip::vip(best_glm, num_features = 20, bar = FALSE)
+vip::vip(best_rf, num_features = 20, bar = FALSE)
+```
+
+### Step 6: Print the AUC values during Testing
+
+```{r, echo=TRUE}
+# Compute predicted probabilities on testing data
+df_test <- as.data.frame(test_h2o)
+m2_prob <- predict(ensemble, test_h2o, type = "prob")
+df_m2prob <- as.data.frame(m2_prob)
+
+# ROC plot for testing data
+
+roc(df_test$Failure_binary~ df_m2prob[,1], plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+```
